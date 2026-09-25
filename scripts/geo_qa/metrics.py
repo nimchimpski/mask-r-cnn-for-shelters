@@ -13,7 +13,7 @@ import geopandas as gpd
 from . import validation
 
 
-def compute_areas(gdf: gpd.GeoDataFrame, out_col: str = "area_m2",
+def add_areas(gdf: gpd.GeoDataFrame, out_col: str = "area_m2",
                    skip_validity_check: bool = False) -> gpd.GeoDataFrame:
     """
     Add a freshly computed area column (in the GeoDataFrame's CRS units).
@@ -30,11 +30,12 @@ def compute_areas(gdf: gpd.GeoDataFrame, out_col: str = "area_m2",
     large dataset.
     """
     if not skip_validity_check:
-        suspects = validation.diagnose_geometries(gdf)
+        suspects, _ = validation.diagnose_geometries(gdf)
         if suspects.any():
             raise ValueError(
                 f"{suspects.sum()} rows failed geometry validation "
-                f"(see counts above). Run validation.repair_and_clean() first."
+                f"(see counts above). Run validation.diagnose_geometries() + "
+                f"split_clean_and_suspect() first."
             )
 
     gdf = gdf.copy()
@@ -70,6 +71,5 @@ def dataset_extent_summary(gdf: gpd.GeoDataFrame) -> dict:
         "total_label_area_km2": round(total_label_area_km2, 4),
         "density_within_hull": round(total_label_area_km2 / hull_km2, 3) if hull_km2 else None,
     }
-    for k, v in summary.items():
-        print(f"{k:>24}: {v}")
+
     return summary

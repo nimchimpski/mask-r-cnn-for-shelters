@@ -18,18 +18,17 @@ import pandas as pd
 
 
 def load_shapefile(path: str) -> gpd.GeoDataFrame:
-    """Load a shapefile/GeoJSON and print basic shape info."""
-    gdf = gpd.read_file(path)
-    print(f"Loaded {len(gdf)} rows from {path}")
-    print(f"CRS: {gdf.crs}")
-    return gdf
+    """Load a shapefile/GeoJSON. Row count/CRS are on the returned gdf
+    (len(gdf), gdf.crs) — printing that is the caller's job."""
+    return gpd.read_file(path)
 
 
-def diagnose_geometries(gdf: gpd.GeoDataFrame) -> pd.Series:
+def diagnose_geometries(gdf: gpd.GeoDataFrame) -> tuple[pd.Series, dict]:
     """
     Check every geometry for the failure modes that break union/intersection
-    silently. Returns a boolean mask (True = suspect) that can be used to
-    isolate or drop problem rows.
+    silently. Returns (suspects_mask, counts): a boolean mask (True =
+    suspect) usable to isolate/drop problem rows, plus a dict of tallies
+    for the caller to report however it likes (see reporting.py).
 
     Checks, in order:
       1. Null geometry (missing entirely)
@@ -50,33 +49,25 @@ def diagnose_geometries(gdf: gpd.GeoDataFrame) -> pd.Series:
 
     suspects = null_geom | empty_geom | nan_bounds | invalid_topology
 
-    print(f"Null geometries:              {null_geom.sum()}")
-    print(f"Empty geometries:             {empty_geom.sum()}")
-    print(f"NaN bounding-box geometries:  {nan_bounds.sum()}")
-    print(f"Topologically invalid:        {invalid_topology.sum()}")
-    print(f"Total suspect rows:           {suspects.sum()} / {len(gdf)}")
+    counts = {
+        "null_geometries": int(null_geom.sum()),
+        "empty_geometries": int(empty_geom.sum()),
+        "nan_bounding_box": int(nan_bounds.sum()),
+        "topologically_invalid": int(invalid_topology.sum()),
+        "total_suspect": int(suspects.sum()),
+        "total_rows": len(gdf),
+    }
 
-    return suspects
+    return suspects, counts
 
 
 def split_clean_and_suspect(
     gdf: gpd.GeoDataFrame, suspects_mask: pd.Series
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """Split a GeoDataFrame into (clean, suspect) based on a suspects mask."""
+    """Split a GeoDataFrame into (clean, suspect) based on a suspects mask.
+    Drops suspects rather than repairing them (e.g. via buffer(0)), since
+    that can silently change shapes — so you always know exactly what was
+    excluded."""
     clean = gdf[~suspects_mask].reset_index(drop=True)
     suspect = gdf[suspects_mask]
-    return clean, suspect
-
-
-def repair_and_clean(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """
-    Full pipeline: diagnose, then return only the clean rows.
-    Does NOT attempt to repair invalid topology in place (buffer(0) can
-    silently change shapes) — flags and drops instead, so you always know
-    exactly what was excluded. If you want to keep repaired rows, use
-    diagnose_geometries() + your own buffer(0) step explicitly.
-    """
-    suspects = diagnose_geometries(gdf)
-    clean, suspect = split_clean_and_suspect(gdf, suspects)
-    print(f"\nKept {len(clean)} clean rows, isolated {len(suspect)} suspect rows.")
     return clean, suspect

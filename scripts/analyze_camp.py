@@ -19,24 +19,38 @@ def main(shapefile_path: str, tile_size_px: int, resolution_m: float,
 
     print("\n=== 1. Load & validate geometries ===")
     gdf = validation.load_shapefile(shapefile_path)
-    clean, suspect = validation.repair_and_clean(gdf)
-    reporting.export_geojson(suspect, f"{out_prefix}_suspects.geojson")
+    print(f"Loaded {len(gdf)} rows from {shapefile_path}")
+    print(f"CRS: {gdf.crs}")
+    # create a boolean series indicating teh suspects 
+    suspect_mask_s, counts_dict = validation.diagnose_geometries(gdf)
+    #  use the series to output 2 gdf's (good and bad)
+    clean_gdf, suspect_gdf = validation.split_clean_and_suspect(gdf, suspect_mask_s)
+    #  count goods and bads
+    counts_dict["kept"] = len(clean_gdf)
+    counts_dict["isolated"] = len(suspect_gdf)
+    # print summary
+    reporting.print_diagnosis_summary(counts_dict)
+    reporting.export_geojson(suspect_gdf, f"{out_prefix}_suspects.geojson")
 
     print("\n=== 2. Compute areas fresh from geometry (ignore stored fields) ===")
-    clean = metrics.compute_areas(clean)
+    clean_gdf = metrics.add_areas(clean_gdf)
 
     print("\n=== 3. Dataset extent summary ===")
-    metrics.dataset_extent_summary(clean)
+    metrics.dataset_extent_summary(clean_gdf)
 
     print(f"\n=== 4. Tile grid @ {tile_size_px}px / {resolution_m}m/px ===")
-    tile_gdf = tiling.generate_tile_grid(clean, tile_size_px, resolution_m)
-    tile_gdf = tiling.compute_tile_label_coverage(tile_gdf, clean)
-    usable = tiling.filter_usable_tiles(tile_gdf, min_coverage)
+    tile_gdf = tiling.generate_tile_grid(clean_gdf, tile_size_px, resolution_m)
+    print(f"Generated {len(tile_gdf)} candidate tiles at {tile_size_px * resolution_m:.1f} m per side "
+          f"({tile_size_px}px @ {resolution_m}m/px)")
+    tile_gdf = tiling.add_tile_label_coverage(tile_gdf, clean_gdf)
+    usable_gdf = tiling.filter_usable_tiles(tile_gdf, min_coverage)
+    print(f"{len(usable_gdf)} usable tiles out of {len(tile_gdf)} "
+          f"(threshold: {min_coverage:.0%} coverage)")
 
     print("\n=== 5. Diagnostic outputs ===")
     reporting.plot_coverage_histogram(tile_gdf, f"{out_prefix}_coverage_histogram.png")
-    reporting.export_geojson(clean, f"{out_prefix}_cleaned.geojson")
-    reporting.export_geojson(usable, f"{out_prefix}_usable_tiles.geojson")
+    reporting.export_geojson(clean_gdf, f"{out_prefix}_cleaned.geojson")
+    reporting.export_geojson(usable_gdf, f"{out_prefix}_usable_tiles.geojson")
 
     print("\nDone.")
 
