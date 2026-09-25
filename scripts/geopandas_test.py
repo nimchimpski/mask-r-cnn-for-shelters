@@ -18,12 +18,14 @@ def main():
     aoi_poly = camps_gdf.geometry.union_all()
 
     camps_gdf.plot()
+
     # boundary_gdf.plot()
 
     #  create full tile grid
     tile_grid_gdf = geo_qa.generate_tile_grid(camps_gdf, 256, 0.3)
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="invalid value encountered in (within|intersection|unary_union)")
+
         # only tiles fully inside AOI
         filtered_tiles_gdf = tile_grid_gdf[tile_grid_gdf.within(aoi_poly)].copy()
         print(f"{len(filtered_tiles_gdf)} / {len(tile_grid_gdf)} tiles fall within the AOI")
@@ -45,22 +47,7 @@ def main():
     useable_gdf.plot(ax=ax, facecolor="none", edgecolor="red", linewidth=1)
     plot.show()
 
-    return
 
-
-    gdf_addarea = metrics.add_areas(gdf)
-
-
-    summary = metrics.dataset_extent_summary(gdf_addarea)
-    print(">>>\n",summary)
-
-
-    # plot.show() 
-
-
-    tile_gdf = tiling.generate_tile_grid(gdf_addarea, 256, 0.3)
-    tile_gdf = tiling.add_tile_label_coverage(tile_gdf, gdf_addarea)
-    usable = tiling.filter_usable_tiles(tile_gdf, 0.00)
 
 
 if __name__ == "__main__":

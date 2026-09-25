@@ -18,6 +18,8 @@ CAMP_OUTLINES = "kutupalong/Camp_09/CXB_New_camp_outline_KML_20180528.kml"
 SURVEYED_CAMPS = ["Camp 8E", "Camp 8W", "Camp 9"]  # checked in QGIS: fully surveyed inside these outlines
 IMAGES = sorted(glob.glob("kutupalong/Camp_*/Image_*.tif"))
 MOSAIC = "kutupalong/mosaic.vrt"
+MOSAIC_WARPED = "kutupalong/mosaic_warped.vrt"
+TARGET_RES_M = None  # None = native pixel size; e.g. 0.3 to resample every source onto one shared grid
 OUT_DIR = "dataset_camps"
 TILE_PX = 256
 BLOCK_M = 230  # split in ~230 m blocks so neighbouring tiles don't leak across splits
@@ -36,9 +38,17 @@ def main():
 
     # 2. merge camp images into one virtual mosaic (they share a pixel grid and agree where they overlap)
     gdal.BuildVRT(MOSAIC, IMAGES, srcNodata=0, VRTNodata=0).FlushCache()
-    src = rasterio.open(MOSAIC)
+    mosaic_path = MOSAIC
+    if TARGET_RES_M is not None:
+        # warp the merged mosaic, not IMAGES: a VRT-format warp only reads its first input
+        # targetAlignedPixels puts pixel edges at multiples of the target res, so every source shares one grid
+        # use resampleAlg="average" when shrinking, "bilinear"/"cubic" when enlarging
+        gdal.Warp(MOSAIC_WARPED, MOSAIC, format="VRT", xRes=TARGET_RES_M, yRes=TARGET_RES_M, targetAlignedPixels=True,
+                  resampleAlg="average", srcNodata=0, dstNodata=0).FlushCache()
+        mosaic_path = MOSAIC_WARPED
+    src = rasterio.open(mosaic_path)
 
-    # 3. tile grid at native resolution, snapped onto the mosaic's pixel grid
+    # 3. tile grid at the mosaic's resolution, snapped onto its pixel grid
     res, x0, y0 = src.res[0], src.transform.c, src.transform.f
     tile_gdf = geo_qa.generate_tile_grid(camps_gdf, TILE_PX, res)
     minx, miny = tile_gdf.total_bounds[:2]
