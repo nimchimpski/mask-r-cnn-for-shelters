@@ -21,7 +21,7 @@ MOSAIC = "kutupalong/mosaic.vrt"
 MOSAIC_WARPED = "kutupalong/mosaic_warped.vrt"
 TARGET_RES_M = None  # None = native pixel size; e.g. 0.3 to resample every source onto one shared grid
 OUT_DIR = "dataset_camps"
-TILE_PX = 256
+TILE_PX = 512  # 51 m at 0.1 m: halves structures cut by tile edges vs 256 (26% vs 47%)
 BLOCK_M = 230  # split in ~230 m blocks so neighbouring tiles don't leak across splits
 SEED = 0
 
@@ -72,17 +72,18 @@ def main():
 
         labels_here = gdf.geometry.iloc[gdf.sindex.query(tile, predicate="intersects")]
         if len(labels_here):
-            mask = rasterize(((g, 1) for g in labels_here), out_shape=(TILE_PX, TILE_PX), transform=transform, dtype="uint8")
+            # each label keeps its own id, so touching structures stay separate instances
+            mask = rasterize(((g, k + 1) for k, g in enumerate(labels_here)), out_shape=(TILE_PX, TILE_PX), transform=transform, dtype="uint16")
         else:
-            mask = np.zeros((TILE_PX, TILE_PX), dtype="uint8")
+            mask = np.zeros((TILE_PX, TILE_PX), dtype="uint16")
 
         name = f"tile_{i:05d}.tif"
         profile = dict(driver="GTiff", width=TILE_PX, height=TILE_PX, crs=src.crs, transform=transform, compress="deflate")
         with rasterio.open(f"{OUT_DIR}/images/{name}", "w", count=chip.shape[0], dtype=chip.dtype, **profile) as dst:
             dst.write(chip)
-        with rasterio.open(f"{OUT_DIR}/masks/{name}", "w", count=1, dtype="uint8", **profile) as dst:
+        with rasterio.open(f"{OUT_DIR}/masks/{name}", "w", count=1, dtype="uint16", **profile) as dst:
             dst.write(mask, 1)
-        records.append({"name": name, "label_frac": mask.mean(), "geometry": tile})
+        records.append({"name": name, "label_frac": float((mask > 0).mean()), "geometry": tile})
 
     src.close()
     print(f"Wrote {len(records)} / {len(tile_gdf)} chips (rest had nodata)")
@@ -90,12 +91,14 @@ def main():
     # 5. spatial train/val/test split by blocks of tiles, not per tile
     index_gdf = gpd.GeoDataFrame(records, crs=gdf.crs)
     index_gdf["block"] = [f"{int(t.bounds[0] // BLOCK_M)}_{int(t.bounds[1] // BLOCK_M)}" for t in index_gdf.geometry]
-    blocks = index_gdf["block"].unique()
-    np.random.default_rng(SEED).shuffle(blocks)
-    n_train, n_val = int(len(blocks) * 0.7), int(len(blocks) * 0.15)
-    split_of = {b: "train" for b in blocks[:n_train]}
-    split_of |= {b: "val" for b in blocks[n_train:n_train + n_val]}
-    split_of |= {b: "test" for b in blocks[n_train + n_val:]}
+    # stratify by structure density: sort blocks sparse -> dense, then in each run of ~7
+    # send one to val, one to test, the rest to train (~70/15/15), so every split spans the density range
+    block_frac_s = index_gdf.groupby("block")["label_frac"].mean().sort_values()
+    rng = np.random.default_rng(SEED)
+    split_of = {}
+    for group in np.array_split(block_frac_s.index.values, int(np.ceil(len(block_frac_s) / 7))):
+        for k, b in enumerate(rng.permutation(group)):
+            split_of[b] = "val" if k == 0 else "test" if k == 1 else "train"
     index_gdf["split"] = index_gdf["block"].map(split_of)
     index_gdf.to_file(f"{OUT_DIR}/index.geojson")
     print(index_gdf.groupby("split").agg(tiles=("name", "size"), blocks=("block", "nunique"), label_frac=("label_frac", "mean")))
@@ -106,7 +109,7 @@ def main():
         with rasterio.open(f"{OUT_DIR}/images/{name}") as s:
             ax.imshow(s.read().transpose(1, 2, 0))
         with rasterio.open(f"{OUT_DIR}/masks/{name}") as s:
-            ax.contour(s.read(1), levels=[0.5], colors="red", linewidths=0.7)
+            ax.contour(s.read(1) > 0, levels=[0.5], colors="red", linewidths=0.7)
         ax.set_title(name)
         ax.axis("off")
     fig.savefig(f"{OUT_DIR}/sample_pairs.png", dpi=100, bbox_inches="tight")
