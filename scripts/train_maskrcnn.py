@@ -16,7 +16,7 @@ DATA_DIR = "dataset_camps"
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 TILE_PX = 512  # must match build_dataset.py
 BATCH_SIZE = 2
-EPOCHS = 3
+EPOCHS = 15  # ~7 min/epoch at 512px, batch 2, on this M2
 LR = 1e-4
 SEED = 0
 CHECKPOINT = "maskrcnn_checkpoint.pt"  # {epoch, model, optimizer} - lets an interrupted run resume
@@ -90,11 +90,13 @@ def main():
     # 3. train (resume from a checkpoint if this run was interrupted)
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=LR)
     start_epoch = 0
+    best_val = float("inf")
     if os.path.exists(CHECKPOINT):
         ckpt = torch.load(CHECKPOINT, map_location=DEVICE)
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         start_epoch = ckpt["epoch"] + 1
+        best_val = ckpt["best_val"]
         print(f"resumed from {CHECKPOINT}: starting at epoch {start_epoch}", flush=True)
 
     for epoch in range(start_epoch, EPOCHS):
@@ -127,7 +129,12 @@ def main():
 
         print(f"epoch {epoch}: train loss {epoch_loss / len(train_loader):.3f} | "
               f"val loss {val_loss / len(val_loader):.3f} | {time.time() - t0:.0f}s", flush=True)
-        torch.save({"epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict()}, CHECKPOINT)
+        if val_loss / len(val_loader) < best_val:
+            best_val = val_loss / len(val_loader)
+            torch.save(model.state_dict(), "maskrcnn_best.pt")
+            print(f"  new best val loss -> saved maskrcnn_best.pt", flush=True)
+        torch.save({"epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                    "best_val": best_val}, CHECKPOINT)
 
     torch.save(model.state_dict(), "maskrcnn_structures.pt")
 
