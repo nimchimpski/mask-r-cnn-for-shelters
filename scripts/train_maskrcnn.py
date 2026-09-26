@@ -18,6 +18,7 @@ TILE_PX = 512  # must match build_dataset.py
 BATCH_SIZE = 2
 EPOCHS = 15  # ~7 min/epoch at 512px, batch 2, on this M2
 LR = 1e-4
+TRAINABLE_BACKBONE_LAYERS = 0  # 0 = freeze whole ResNet; torchvision default is 3 (only stem + layer1 frozen)
 SEED = 0
 CHECKPOINT = "maskrcnn_checkpoint.pt"  # {epoch, model, optimizer} - lets an interrupted run resume
 
@@ -80,7 +81,8 @@ def main():
 
     # 2. Mask R-CNN, pretrained backbone, 2 classes: background + structure
     # default transform resizes to 800px; keep chips at their native size
-    model = maskrcnn_resnet50_fpn_v2(weights=MaskRCNN_ResNet50_FPN_V2_Weights.DEFAULT, min_size=TILE_PX, max_size=TILE_PX)
+    model = maskrcnn_resnet50_fpn_v2(weights=MaskRCNN_ResNet50_FPN_V2_Weights.DEFAULT, min_size=TILE_PX, max_size=TILE_PX,
+                                     trainable_backbone_layers=TRAINABLE_BACKBONE_LAYERS)
     in_features = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features, 2)
     in_channels_mask = model.roi_heads.mask_predictor.conv5_mask.in_channels
@@ -101,6 +103,10 @@ def main():
 
     for epoch in range(start_epoch, EPOCHS):
         model.train()
+        # v2 backbone uses plain BatchNorm; batch-of-2 stats would overwrite the pretrained running stats
+        for mod in model.backbone.modules():
+            if isinstance(mod, torch.nn.BatchNorm2d):
+                mod.eval()
         epoch_loss = 0.0
         t0 = time.time()
         for step, (images, targets) in enumerate(train_loader):
