@@ -5,10 +5,14 @@ import time
 import numpy as np
 import rasterio
 import torch
+import torchvision
 from torch.utils.data import Dataset, DataLoader
 from torchvision.models.detection import maskrcnn_resnet50_fpn_v2, MaskRCNN_ResNet50_FPN_V2_Weights
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
+
+
+
 
 DATA_DIR = "dataset_camps"
 # torch 2.7/torchvision 0.22 hung on MPS in Mask R-CNN's RoIAlign backward;
@@ -85,6 +89,7 @@ class TileDataset(Dataset):
 
 
 def main():
+
     torch.manual_seed(SEED)
 
     # 1. splits from the dataset index (plain json: geopandas isn't installed in this env)
