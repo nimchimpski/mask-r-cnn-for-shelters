@@ -17,7 +17,7 @@ import warnings
 import geopandas as gpd
 import matplotlib.pyplot as plot
 
-import geo_qa
+import scripts.geo_qa_mod as geo_qa_mod
 
 
 def main(shapefile_path: str, tile_size_px: int, resolution_m: float,
@@ -26,11 +26,11 @@ def main(shapefile_path: str, tile_size_px: int, resolution_m: float,
     warnings.filterwarnings("ignore", message="invalid value encountered in")
 
     print("\n=== 1. Load & validate geometries ===")
-    gdf = gpd.read_file(shapefile_path)
+    gdf = gpd.read_file(shapefile_path).to_crs("EPSG:32646")
     print(f"Loaded {len(gdf)} rows from {shapefile_path}")
     print(f"CRS: {gdf.crs}")
     # create a boolean series indicating teh suspects 
-    suspect_mask_s, counts_dict = geo_qa.diagnose_geometries(gdf)
+    suspect_mask_s, counts_dict = geo_qa_mod.diagnose_geometries(gdf)
     #  use the series to output 2 gdf's (good and bad)
     clean_gdf = gdf[~suspect_mask_s].reset_index(drop=True)
     suspect_gdf = gdf[suspect_mask_s]
@@ -56,7 +56,7 @@ def main(shapefile_path: str, tile_size_px: int, resolution_m: float,
     camps_gdf = gpd.read_file(camp_outlines_path).to_crs(clean_gdf.crs)
     camps_gdf = camps_gdf[camps_gdf["Name"].isin(camps)]
     aoi_poly = camps_gdf.geometry.union_all()
-    tile_gdf = geo_qa.generate_tile_grid(camps_gdf, tile_size_px, resolution_m)
+    tile_gdf = geo_qa_mod.generate_tile_grid(camps_gdf, tile_size_px, resolution_m)
     tile_gdf = tile_gdf[tile_gdf.within(aoi_poly)].copy()
     print(f"{len(tile_gdf)} tiles fall within {', '.join(camps)}")
     tile_gdf["label_coverage"] = tile_gdf.geometry.intersection(label_union).area / tile_gdf.area
@@ -82,12 +82,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("shapefile", help="Path to the structure-footprint shapefile")
     parser.add_argument("--tile-size", type=int, default=256, help="Tile size in pixels")
-    parser.add_argument("--resolution", type=float, default=0.3, help="Metres per pixel")
+    parser.add_argument("--resolution", type=float, default=0.1, help="Metres per pixel")
     parser.add_argument("--min-coverage", type=float, default=0.05,
                          help="Minimum label coverage fraction for a tile to count as usable")
     parser.add_argument("--out-prefix", default="camp_analysis",
                          help="Prefix for output files")
-    parser.add_argument("--camp-outlines", default="kutupalong/Camp_09/CXB_New_camp_outline_KML_20180528.kml",
+    parser.add_argument("--camp-outlines", default="data/kutupalong/Camp_09/CXB_New_camp_outline_KML_20180528.kml",
                          help="Camp outline file (KML/shp) with a 'Name' column")
     parser.add_argument("--camps", nargs="+", default=["Camp 8E", "Camp 8W", "Camp 9"],
                          help="Camp names whose outlines are fully surveyed")

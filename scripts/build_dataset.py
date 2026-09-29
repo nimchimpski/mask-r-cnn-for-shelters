@@ -11,14 +11,14 @@ from osgeo import gdal
 from rasterio.features import rasterize
 from rasterio.windows import from_bounds as window_from_bounds
 
-import geo_qa
+import scripts.geo_qa_mod as geo_qa_mod
 
-LABELS = "Struture_Footprint_March2020_C8E_C8W_C9/Structure_Footprint_March2020_C8E_C8W_C9.shp"
-CAMP_OUTLINES = "kutupalong/Camp_09/CXB_New_camp_outline_KML_20180528.kml"
+LABELS = "labels_clean/cleaned.geojson"
+CAMP_OUTLINES = "data/kutupalong/Camp_09/CXB_New_camp_outline_KML_20180528.kml"
 SURVEYED_CAMPS = ["Camp 8E", "Camp 8W", "Camp 9"]  # checked in QGIS: fully surveyed inside these outlines
-IMAGES = sorted(glob.glob("kutupalong/Camp_*/Image_*.tif"))
-MOSAIC = "kutupalong/mosaic.vrt"
-MOSAIC_WARPED = "kutupalong/mosaic_warped.vrt"
+IMAGES = sorted(glob.glob("data/kutupalong/Camp_*/Image_*.tif"))
+MOSAIC = "data/kutupalong/mosaic.vrt"
+MOSAIC_WARPED = "data/kutupalong/mosaic_warped.vrt"
 TARGET_RES_M = None  # None = native pixel size; e.g. 0.3 to resample every source onto one shared grid
 OUT_DIR = "dataset_camps"
 TILE_PX = 512  # 51 m at 0.1 m: halves structures cut by tile edges vs 256 (26% vs 47%)
@@ -50,7 +50,7 @@ def main():
 
     # 3. tile grid at the mosaic's resolution, snapped onto its pixel grid
     res, x0, y0 = src.res[0], src.transform.c, src.transform.f
-    tile_gdf = geo_qa.generate_tile_grid(camps_gdf, TILE_PX, res)
+    tile_gdf = geo_qa_mod.generate_tile_grid(camps_gdf, TILE_PX, res)
     minx, miny = tile_gdf.total_bounds[:2]
     tile_gdf["geometry"] = tile_gdf.translate(-((minx - x0) % res), -((miny - y0) % res))
     tile_gdf = tile_gdf[tile_gdf.within(aoi_poly)].reset_index(drop=True)

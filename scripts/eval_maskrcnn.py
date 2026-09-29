@@ -19,7 +19,7 @@ from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
 
 sys.path.insert(0, "scripts")
-from train_maskrcnn import DATA_DIR, DEVICE, TILE_PX, TileDataset
+from train_maskrcnn import DATA_DIR, DEVICE, TILE_PX, TileDataset, anchor_gen
 
 MAX_DETS = 300  # 0.3/0.5 m tiles will exceed torchvision's default 100
 OBJ_SCORE_THRESH = 0.5  # operating point for object metrics only; COCO AP uses all detections
@@ -53,6 +53,8 @@ def build_coco_gt(names_list):
 
 def load_model(weights_path):
     model = maskrcnn_resnet50_fpn_v2(min_size=TILE_PX, max_size=TILE_PX, box_detections_per_img=MAX_DETS)
+    # the v2 builder hardcodes its own anchor generator and ignores it as a kwarg; must set after construction
+    model.rpn.anchor_generator = anchor_gen
     in_features = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features, 2)
     in_channels_mask = model.roi_heads.mask_predictor.conv5_mask.in_channels
@@ -146,9 +148,7 @@ def main():
     coco_gt = build_coco_gt(val_names)
 
     runs = [
-        ("run1_unfrozen_adamw", "maskrcnn_best_run1_unfrozen.pt"),
-        ("run2_frozen_adamw", "maskrcnn_best_run2_frozen_adamw.pt"),
-        ("run3_frozen_sgd", "maskrcnn_best_run3_sgd.pt"),
+        ("run4_frozen_sgd_warmup", "checkpoints/maskrcnn_best4.pt"),
     ]
     for label, weights_path in runs:
         score_model(label, weights_path, coco_gt, val_names)

@@ -10,6 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision.models.detection import maskrcnn_resnet50_fpn_v2, MaskRCNN_ResNet50_FPN_V2_Weights
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
+from torchvision.models.detection.anchor_utils import AnchorGenerator
 
 
 
@@ -30,7 +31,11 @@ WEIGHT_DECAY = 1e-4
 LR_DECAY_EPOCHS = [int(EPOCHS * 0.75), int(EPOCHS * 0.9)]  # 10x drop at each, as in the paper
 TRAINABLE_BACKBONE_LAYERS = 0  # 0 = freeze whole ResNet; torchvision default is 3 (only stem + layer1 frozen)
 SEED = 0
-CHECKPOINT = "maskrcnn_checkpoint.pt"  # {epoch, model, optimizer} - lets an interrupted run resume
+CHECKPOINT = "checkpoints/maskrcnn_checkpoint.pt"  # {epoch, model, optimizer} - lets an interrupted run resume
+
+anchor_gen = AnchorGenerator(sizes=((16,), (32,), (64,), (128,), (256,)),
+                             aspect_ratios=((0.5, 1.0, 2.0),) * 5)
+
 
 
 class TileDataset(Dataset):
@@ -107,8 +112,13 @@ def main():
 
     # 2. Mask R-CNN, pretrained backbone, 2 classes: background + structure
     # default transform resizes to 800px; TRAIN_SCALES keeps chips at (jittered) native size
-    model = maskrcnn_resnet50_fpn_v2(weights=MaskRCNN_ResNet50_FPN_V2_Weights.DEFAULT, min_size=TRAIN_SCALES, max_size=TILE_PX,
-                                     trainable_backbone_layers=TRAINABLE_BACKBONE_LAYERS)
+    model = maskrcnn_resnet50_fpn_v2(weights=MaskRCNN_ResNet50_FPN_V2_Weights.DEFAULT, 
+                                     min_size=TRAIN_SCALES, 
+                                     max_size=TILE_PX, 
+                                     trainable_backbone_layers=TRAINABLE_BACKBONE_LAYERS, 
+                                     box_detections_per_img=200)
+    # the v2 builder hardcodes its own anchor generator, so it can't be passed as a kwarg
+    model.rpn.anchor_generator = anchor_gen
     in_features = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features, 2)
     in_channels_mask = model.roi_heads.mask_predictor.conv5_mask.in_channels
@@ -130,6 +140,10 @@ def main():
         best_val = ckpt["best_val"]
         print(f"resumed from {CHECKPOINT}: starting at epoch {start_epoch}", flush=True)
 
+    warmup = None
+    # LinearLR scales the LR on construction, so it must be created once, not per epoch
+    if start_epoch == 0:
+        warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.001, total_iters=min(1000, len(train_loader)))
     for epoch in range(start_epoch, EPOCHS):
         model.train()
         # v2 backbone uses plain BatchNorm; batch-of-2 stats would overwrite the pretrained running stats
@@ -149,13 +163,18 @@ def main():
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            if epoch == 0 and warmup is not None:
+                warmup.step()
             epoch_loss += loss.item()
             if step % 50 == 0:
-                print(f"  epoch {epoch} step {step}/{len(train_loader)}: loss {loss.item():.3f} "
-                      f"({time.time() - t0:.0f}s elapsed)", flush=True)
+                elapsed = time.time() - t0
+                eta = elapsed / (step + 1) * (len(train_loader) - step - 1)
+                print(f"  epoch {epoch + 1}/{EPOCHS} step {step}/{len(train_loader)}: loss {loss.item():.3f} "
+                      f"| lr {optimizer.param_groups[0]['lr']:.2e} | {elapsed:.0f}s elapsed, ~{eta:.0f}s left in epoch", flush=True)
         scheduler.step()
 
         # model.train() mode still returns losses (not predictions); no_grad just skips backprop
+        print(f"  validating on {len(val_loader)} batches...", flush=True)
         val_loss = 0.0
         with torch.no_grad():
             for images, targets in val_loader:
@@ -167,12 +186,12 @@ def main():
               f"val loss {val_loss / len(val_loader):.3f} | lr {scheduler.get_last_lr()[0]:.2e} | {time.time() - t0:.0f}s", flush=True)
         if val_loss / len(val_loader) < best_val:
             best_val = val_loss / len(val_loader)
-            torch.save(model.state_dict(), "maskrcnn_best.pt")
+            torch.save(model.state_dict(), "checkpoints/maskrcnn_best.pt")
             print(f"  new best val loss -> saved maskrcnn_best.pt", flush=True)
         torch.save({"epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
                     "scheduler": scheduler.state_dict(), "best_val": best_val}, CHECKPOINT)
 
-    torch.save(model.state_dict(), "maskrcnn_structures.pt")
+    torch.save(model.state_dict(), "checkpoints/maskrcnn_structures.pt")
 
 
 if __name__ == "__main__":
