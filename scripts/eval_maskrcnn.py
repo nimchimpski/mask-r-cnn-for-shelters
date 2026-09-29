@@ -9,7 +9,9 @@ import io
 import json
 import sys
 
+import matplotlib.pyplot as plt
 import numpy as np
+import rasterio
 import torch
 from pycocotools import mask as mask_utils
 from pycocotools.coco import COCO
@@ -22,7 +24,9 @@ sys.path.insert(0, "scripts")
 from train_maskrcnn import DATA_DIR, DEVICE, TILE_PX, TileDataset, anchor_gen
 
 MAX_DETS = 300  # 0.3/0.5 m tiles will exceed torchvision's default 100
-OBJ_SCORE_THRESH = 0.5  # operating point for object metrics only; COCO AP uses all detections
+OBJ_SCORE_THRESH = 0.6  # operating point for object metrics only; picked from SWEEP_THRESHOLDS (best F1, ~0 count err)
+SWEEP_THRESHOLDS = (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+CONTACT_SHEET_TILES = 16  # worst tiles by |count error|, at OBJ_SCORE_THRESH
 
 
 def build_coco_gt(names_list):
@@ -88,7 +92,70 @@ def run_inference(model, names_list):
     return detections
 
 
-def score_model(label, weights_path, coco_gt, names_list):
+def per_tile_counts(coco_eval, n_images, thresh):
+    """Per-image (tp, pred, gt) at a given score threshold, reusing COCO's greedy one-to-one
+    matching (thresholding after matching == matching only the kept detections)."""
+    tp_arr, pred_arr, gt_arr = [], [], []
+    for eval_img in coco_eval.evalImgs[:n_images]:  # first block = areaRng "all"
+        if eval_img is None:
+            tp_arr.append(0), pred_arr.append(0), gt_arr.append(0)
+            continue
+        kept_arr = np.array(eval_img["dtScores"]) >= thresh
+        matched_arr = eval_img["dtMatches"][0] > 0  # iouThrs[0] = 0.5
+        tp_arr.append(int((kept_arr & matched_arr).sum()))
+        pred_arr.append(int(kept_arr.sum()))
+        gt_arr.append(len(eval_img["gtIds"]))
+    return np.array(tp_arr), np.array(pred_arr), np.array(gt_arr)
+
+
+def print_object_metrics(tp_arr, pred_arr, gt_arr, prefix=""):
+    """Object metrics (Gella Eqs. 7-8) from per-tile TP/pred/GT counts."""
+    tp, gt = int(tp_arr.sum()), int(gt_arr.sum())
+    fp = int((pred_arr - tp_arr).sum())
+    fn = gt - tp
+    correctness = tp / (tp + fp) if (tp + fp) else float("nan")
+    completeness = tp / gt if gt else float("nan")
+    quality = tp / (tp + fp + fn) if (tp + fp + fn) else float("nan")
+    f1 = 2 * correctness * completeness / (correctness + completeness) if (correctness + completeness) else float("nan")
+    count_err_pct = 100 * (tp + fp - gt) / gt if gt else float("nan")
+    mae = np.abs(pred_arr - gt_arr).mean()
+    print(f"{prefix}TP {tp} FP {fp} FN {fn} (ref {gt})  correctness {correctness:.3f}  "
+          f"completeness {completeness:.3f}  quality {quality:.3f}  F1 {f1:.3f}  "
+          f"count err {count_err_pct:+.1f}%  tile MAE {mae:.1f}")
+    return correctness, completeness, quality, f1, count_err_pct
+
+
+def save_contact_sheet(names_list, detections, pred_arr, gt_arr, thresh, out_path):
+    """Visual QA: red = GT footprints, cyan = kept predictions, worst tiles by |count error|."""
+    worst_idx_arr = np.argsort(-np.abs(pred_arr - gt_arr))[:CONTACT_SHEET_TILES]
+    dets_by_image = {}
+    for det in detections:
+        if det["score"] >= thresh:
+            dets_by_image.setdefault(det["image_id"], []).append(det)
+
+    n_cols = 4
+    n_rows = -(-len(worst_idx_arr) // n_cols)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 6 * n_rows))
+    for ax, image_id in zip(axes.ravel(), worst_idx_arr):
+        name = names_list[image_id]
+        with rasterio.open(f"{DATA_DIR}/images/{name}") as src:
+            ax.imshow(src.read().transpose(1, 2, 0))
+        with rasterio.open(f"{DATA_DIR}/masks/{name}") as src:
+            ax.contour(src.read(1) > 0, levels=[0.5], colors="red", linewidths=0.6)
+        pred_mask_arr = np.zeros((TILE_PX, TILE_PX), dtype=bool)
+        for det in dets_by_image.get(image_id, []):
+            pred_mask_arr |= mask_utils.decode(det["segmentation"]).astype(bool)
+        ax.contour(pred_mask_arr, levels=[0.5], colors="cyan", linewidths=0.6)
+        ax.set_title(f"{name}  pred {pred_arr[image_id]} / ref {gt_arr[image_id]}", fontsize=8)
+        ax.axis("off")
+    for ax in axes.ravel()[len(worst_idx_arr):]:
+        ax.axis("off")
+    fig.savefig(out_path, dpi=90, bbox_inches="tight")
+    plt.close(fig)
+    print(f"\n  contact sheet ({len(worst_idx_arr)} worst tiles by count error) -> {out_path}")
+
+
+def score_model(label, weights_path, coco_gt, names_list, block_of):
     print(f"\n=== {label} ({weights_path}) ===")
     model = load_model(weights_path)
     detections = run_inference(model, names_list)
@@ -108,42 +175,41 @@ def score_model(label, weights_path, coco_gt, names_list):
     precision_arr = coco_eval.eval["precision"][:, :, 0, 0, -1]  # [IoU, recall, cat, area=all, maxDets=last]
     print(f" AP @[ IoU=0.50:0.95 | area=all | maxDets={MAX_DETS} ] = {precision_arr[precision_arr > -1].mean():.3f}")
 
-    # 2. Object metrics (Gella Eqs. 7-8) at IoU 0.5, reusing COCO's greedy one-to-one matching.
-    # Thresholding after greedy-by-score matching equals matching only the kept detections.
     n_images = len(coco_eval.params.imgIds)
-    tp_total = fp_total = gt_total = 0
-    abs_count_err_list = []
-    for eval_img in coco_eval.evalImgs[:n_images]:  # first block = areaRng "all"
-        if eval_img is None:
-            abs_count_err_list.append(0)
-            continue
-        kept_arr = np.array(eval_img["dtScores"]) >= OBJ_SCORE_THRESH
-        matched_arr = eval_img["dtMatches"][0] > 0  # iouThrs[0] = 0.5
-        tp_img = int((kept_arr & matched_arr).sum())
-        pred_img = int(kept_arr.sum())
-        gt_img = len(eval_img["gtIds"])
-        tp_total += tp_img
-        fp_total += pred_img - tp_img
-        gt_total += gt_img
-        abs_count_err_list.append(abs(pred_img - gt_img))
 
-    fn_total = gt_total - tp_total
-    correctness = tp_total / (tp_total + fp_total)
-    completeness = tp_total / gt_total
-    quality = tp_total / (tp_total + fp_total + fn_total)
-    f1 = 2 * correctness * completeness / (correctness + completeness)
-    count_err_pct = 100 * (tp_total + fp_total - gt_total) / gt_total
-    print(f"\n  object metrics @ IoU 0.5, score >= {OBJ_SCORE_THRESH}:")
-    print(f"  TP {tp_total}  FP {fp_total}  FN {fn_total}  (ref {gt_total})")
-    print(f"  correctness {correctness:.3f}  completeness {completeness:.3f}  "
-          f"quality {quality:.3f}  F1 {f1:.3f}")
-    print(f"  count error {count_err_pct:+.1f}%  per-tile MAE {np.mean(abs_count_err_list):.1f} "
-          f"(mean ref {gt_total / n_images:.1f}/tile)")
+    # 2. Score-threshold sweep (object metrics only; COCO AP above already covers the full range)
+    print(f"\n  score-threshold sweep @ IoU 0.5:")
+    for thresh in SWEEP_THRESHOLDS:
+        tp_arr, pred_arr, gt_arr = per_tile_counts(coco_eval, n_images, thresh)
+        print_object_metrics(tp_arr, pred_arr, gt_arr, prefix=f"    score>={thresh:.1f}  ")
+
+    # 3. Per-tile / per-block breakdown at the chosen operating point
+    tp_arr, pred_arr, gt_arr = per_tile_counts(coco_eval, n_images, OBJ_SCORE_THRESH)
+    print(f"\n  object metrics @ IoU 0.5, score >= {OBJ_SCORE_THRESH} (overall, {n_images} tiles):")
+    print_object_metrics(tp_arr, pred_arr, gt_arr, prefix="    ")
+
+    blocks_arr = np.array([block_of[name] for name in names_list])
+    block_f1_list, block_count_err_list = [], []
+    print(f"\n  per-block breakdown ({len(set(blocks_arr))} val blocks):")
+    for block in sorted(set(blocks_arr)):
+        in_block = blocks_arr == block
+        _, _, _, f1, count_err_pct = print_object_metrics(
+            tp_arr[in_block], pred_arr[in_block], gt_arr[in_block], prefix=f"    block {block}  ")
+        block_f1_list.append(f1)
+        block_count_err_list.append(count_err_pct)
+    print(f"  block spread: F1 {np.mean(block_f1_list):.3f} +/- {np.std(block_f1_list):.3f} "
+          f"(min {min(block_f1_list):.3f}, max {max(block_f1_list):.3f})  "
+          f"count err {np.mean(block_count_err_list):+.1f}% +/- {np.std(block_count_err_list):.1f}")
+
+    # 4. Contact sheet of the worst tiles by count error, at the chosen operating point
+    save_contact_sheet(names_list, detections, pred_arr, gt_arr, OBJ_SCORE_THRESH,
+                        f"tile_comparisons/{label}_contact_sheet.png")
 
 
 def main():
     features_list = json.load(open(f"{DATA_DIR}/index.geojson"))["features"]
     val_names = [f["properties"]["name"] for f in features_list if f["properties"]["split"] == "val"]
+    block_of = {f["properties"]["name"]: f["properties"]["block"] for f in features_list}
     print(f"scoring on {len(val_names)} val tiles")
     coco_gt = build_coco_gt(val_names)
 
@@ -151,7 +217,7 @@ def main():
         ("run4_frozen_sgd_warmup", "checkpoints/maskrcnn_best4.pt"),
     ]
     for label, weights_path in runs:
-        score_model(label, weights_path, coco_gt, val_names)
+        score_model(label, weights_path, coco_gt, val_names, block_of)
 
 
 if __name__ == "__main__":
