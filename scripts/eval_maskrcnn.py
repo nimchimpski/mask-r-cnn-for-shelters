@@ -22,7 +22,8 @@ from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
 
 sys.path.insert(0, "scripts")
-from train_maskrcnn import DATA_DIR, DEVICE, TILE_PX, TileDataset, anchor_gen
+from train_maskrcnn import DATA_DIR, DEVICE, TILE_PX, anchor_gen
+from geo_mod import TileDataset
 
 MAX_DETS = 300  # 0.3/0.5 m tiles will exceed torchvision's default 100
 OBJ_SCORE_THRESH = 0.6  # operating point for object metrics only; picked from SWEEP_THRESHOLDS (best F1, ~0 count err)

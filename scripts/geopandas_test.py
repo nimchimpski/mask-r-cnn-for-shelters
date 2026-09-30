@@ -3,7 +3,7 @@ import matplotlib.pyplot as plot
 import geopandas as gpd
 import pandas as pd
 
-import scripts.geo_qa_mod as geo_qa_mod
+import scripts.geo_mod as geo_mod
 
 
 def main():
@@ -22,7 +22,7 @@ def main():
     # boundary_gdf.plot()
 
     #  create full tile grid
-    tile_grid_gdf = geo_qa_mod.generate_tile_grid(camps_gdf, 256, 0.3)
+    tile_grid_gdf = geo_mod.generate_tile_grid(camps_gdf, 256, 0.3)
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="invalid value encountered in (within|intersection|unary_union)")
 

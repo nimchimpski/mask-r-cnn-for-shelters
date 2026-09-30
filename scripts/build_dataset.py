@@ -11,7 +11,7 @@ from osgeo import gdal
 from rasterio.features import rasterize
 from rasterio.windows import from_bounds as window_from_bounds
 
-import scripts.geo_qa_mod as geo_qa_mod
+import scripts.geo_mod as geo_mod
 
 LABELS = "labels_clean/cleaned.geojson"
 CAMP_OUTLINES = "data/kutupalong/Camp_09/CXB_New_camp_outline_KML_20180528.kml"
@@ -50,7 +50,7 @@ def main():
 
     # 3. tile grid at the mosaic's resolution, snapped onto its pixel grid
     res, x0, y0 = src.res[0], src.transform.c, src.transform.f
-    tile_gdf = geo_qa_mod.generate_tile_grid(camps_gdf, TILE_PX, res)
+    tile_gdf = geo_mod.generate_tile_grid(camps_gdf, TILE_PX, res)
     minx, miny = tile_gdf.total_bounds[:2]
     tile_gdf["geometry"] = tile_gdf.translate(-((minx - x0) % res), -((miny - y0) % res))
     tile_gdf = tile_gdf[tile_gdf.within(aoi_poly)].reset_index(drop=True)

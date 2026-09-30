@@ -13,6 +13,7 @@ from torchvision.models.detection import maskrcnn_resnet50_fpn_v2, MaskRCNN_ResN
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
 from torchvision.models.detection.anchor_utils import AnchorGenerator
+from scripts.geo_mod import TileDataset
 
 
 
@@ -40,65 +41,65 @@ anchor_gen = AnchorGenerator(sizes=((16,), (32,), (64,), (128,), (256,)),
 
 
 
-class TileDataset(Dataset):
-    """torch's training loop needs a Dataset subclass. Masks already carry per-structure
-    ids from the source shapefile (see build_dataset.py), so instances don't need
-    reconstructing from a merged blob — touching structures stay separate."""
+# class TileDataset(Dataset):
+#     """torch's training loop needs a Dataset subclass. Masks already carry per-structure
+#     ids from the source shapefile (see build_dataset.py), so instances don't need
+#     reconstructing from a merged blob — touching structures stay separate."""
 
-    # def __init__(self, names_list, augment=False):
-    #     self.names_list = names_list
-    #     self.augment = augment
+#     # def __init__(self, names_list, augment=False):
+#     #     self.names_list = names_list
+#     #     self.augment = augment
 
-    def __init__(self, names_list, augment=False, aug="flip", min_area=4):
-        self.names_list, self.augment, self.aug, self.min_area = names_list, augment, aug, min_area
+#     def __init__(self, names_list, augment=False, aug="flip", min_area=4):
+#         self.names_list, self.augment, self.aug, self.min_area = names_list, augment, aug, min_area
 
 
-    def __len__(self):
-        return len(self.names_list)
+#     def __len__(self):
+#         return len(self.names_list)
 
-    def __getitem__(self, i):
-        name = self.names_list[i]
-        with rasterio.open(f"{DATA_DIR}/images/{name}") as s:
-            img_arr = s.read()
-        with rasterio.open(f"{DATA_DIR}/masks/{name}") as s:
-            instance_arr = s.read(1)
-        image = torch.from_numpy(img_arr).float() / 255.0
+#     def __getitem__(self, i):
+#         name = self.names_list[i]
+#         with rasterio.open(f"{DATA_DIR}/images/{name}") as s:
+#             img_arr = s.read()
+#         with rasterio.open(f"{DATA_DIR}/masks/{name}") as s:
+#             instance_arr = s.read(1)
+#         image = torch.from_numpy(img_arr).float() / 255.0
 
-        if self.augment:
-            if np.random.random() < 0.5:
-                image = image.flip(-1); instance_arr = instance_arr[:, ::-1]
-            if np.random.random() < 0.5:
-                image = image.flip(-2); instance_arr = instance_arr[::-1, :]
-            if self.aug == "full":
-                k = np.random.randint(4)
-                image = torch.rot90(image, k, dims=(-2, -1))
-                instance_arr = np.rot90(instance_arr, k)
-                c = np.random.uniform(0.85, 1.15)   # contrast
-                b = np.random.uniform(-0.08, 0.08)  # brightness, same shift on all bands
-                m = image.mean()
-                image = ((image - m) * c + m + b).clamp(0, 1)
-            instance_arr = np.ascontiguousarray(instance_arr)
+#         if self.augment:
+#             if np.random.random() < 0.5:
+#                 image = image.flip(-1); instance_arr = instance_arr[:, ::-1]
+#             if np.random.random() < 0.5:
+#                 image = image.flip(-2); instance_arr = instance_arr[::-1, :]
+#             if self.aug == "full":
+#                 k = np.random.randint(4)
+#                 image = torch.rot90(image, k, dims=(-2, -1))
+#                 instance_arr = np.rot90(instance_arr, k)
+#                 c = np.random.uniform(0.85, 1.15)   # contrast
+#                 b = np.random.uniform(-0.08, 0.08)  # brightness, same shift on all bands
+#                 m = image.mean()
+#                 image = ((image - m) * c + m + b).clamp(0, 1)
+#             instance_arr = np.ascontiguousarray(instance_arr)
 
-        boxes, masks = [], []
-        for instance_id in np.unique(instance_arr):
-            if instance_id == 0:
-                continue
-            mask_k = instance_arr == instance_id
-            ys, xs = np.where(mask_k)
-            if len(xs) < self.min_area:
-                continue
-            boxes.append([xs.min(), ys.min(), xs.max() + 1, ys.max() + 1])
-            masks.append(mask_k)
+#         boxes, masks = [], []
+#         for instance_id in np.unique(instance_arr):
+#             if instance_id == 0:
+#                 continue
+#             mask_k = instance_arr == instance_id
+#             ys, xs = np.where(mask_k)
+#             if len(xs) < self.min_area:
+#                 continue
+#             boxes.append([xs.min(), ys.min(), xs.max() + 1, ys.max() + 1])
+#             masks.append(mask_k)
 
-        masks_arr = np.stack(masks) if masks else np.zeros((0, *instance_arr.shape), dtype=bool)
-        boxes_arr = np.array(boxes, dtype=np.float32).reshape(-1, 4)
-        target = {
-            "boxes": torch.from_numpy(boxes_arr),
-            "labels": torch.ones(len(boxes), dtype=torch.int64),
-            "masks": torch.from_numpy(masks_arr.astype(np.uint8)),
-            "image_id": torch.tensor([i]),
-        }
-        return image, target
+#         masks_arr = np.stack(masks) if masks else np.zeros((0, *instance_arr.shape), dtype=bool)
+#         boxes_arr = np.array(boxes, dtype=np.float32).reshape(-1, 4)
+#         target = {
+#             "boxes": torch.from_numpy(boxes_arr),
+#             "labels": torch.ones(len(boxes), dtype=torch.int64),
+#             "masks": torch.from_numpy(masks_arr.astype(np.uint8)),
+#             "image_id": torch.tensor([i]),
+#         }
+#         return image, target
 
 
 def main(args):
