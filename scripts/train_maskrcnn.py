@@ -115,6 +115,11 @@ def main(args):
     names_by_split = {"train": [], "val": [], "test": []}
     for feat in features_list:
         names_by_split[feat["properties"]["split"]].append(feat["properties"]["name"])
+    if args.train_frac < 1.0:
+        # fixed RNG independent of SEED so 25%/50% subsets are nested prefixes of the full train set
+        order = np.random.RandomState(0).permutation(len(names_by_split["train"]))
+        keep_n = round(len(order) * args.train_frac)
+        names_by_split["train"] = [names_by_split["train"][i] for i in order[:keep_n]]
     print({k: len(v) for k, v in names_by_split.items()})
 
     collate_fn = lambda batch: tuple(zip(*batch))
@@ -215,4 +220,5 @@ if __name__ == "__main__":
     p.add_argument("--backbone-layers", type=int, default=0)
     p.add_argument("--aug", choices=["flip", "full"], default="flip")
     p.add_argument("--min-area", type=int, default=4)
+    p.add_argument("--train-frac", type=float, default=1.0)
     main(p.parse_args())
