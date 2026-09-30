@@ -1,9 +1,10 @@
-"""Score saved Mask R-CNN checkpoints on the val split using COCO mask AP.
+"""Score saved Mask R-CNN checkpoints using COCO mask AP.
 
-Builds an in-memory COCO-format ground truth from dataset_camps/index.geojson (val split),
-runs each checkpoint over the val tiles, and reports the standard COCO mask AP metrics
+Builds an in-memory COCO-format ground truth from dataset_camps/index.geojson (default val split),
+runs each checkpoint over the tiles, and reports the standard COCO mask AP metrics
 (AP, AP50, AP75, AP small/medium/large) so runs are comparable to published results.
 """
+import argparse
 import contextlib
 import io
 import json
@@ -155,7 +156,7 @@ def save_contact_sheet(names_list, detections, pred_arr, gt_arr, thresh, out_pat
     print(f"\n  contact sheet ({len(worst_idx_arr)} worst tiles by count error) -> {out_path}")
 
 
-def score_model(label, weights_path, coco_gt, names_list, block_of):
+def score_model(label, weights_path, coco_gt, names_list, block_of, split):
     print(f"\n=== {label} ({weights_path}) ===")
     model = load_model(weights_path)
     detections = run_inference(model, names_list)
@@ -203,22 +204,22 @@ def score_model(label, weights_path, coco_gt, names_list, block_of):
 
     # 4. Contact sheet of the worst tiles by count error, at the chosen operating point
     save_contact_sheet(names_list, detections, pred_arr, gt_arr, OBJ_SCORE_THRESH,
-                        f"tile_comparisons/{label}_contact_sheet.png")
+                        f"tile_comparisons/{label}_{split}_contact_sheet.png")
 
 
-def main():
+def main(arg):
     features_list = json.load(open(f"{DATA_DIR}/index.geojson"))["features"]
-    val_names = [f["properties"]["name"] for f in features_list if f["properties"]["split"] == "val"]
+    names_list = [f["properties"]["name"] for f in features_list if f["properties"]["split"] == arg.split]
     block_of = {f["properties"]["name"]: f["properties"]["block"] for f in features_list}
-    print(f"scoring on {len(val_names)} val tiles")
-    coco_gt = build_coco_gt(val_names)
-
-    runs = [
-        ("run4_frozen_sgd_warmup", "checkpoints/maskrcnn_best4.pt"),
-    ]
-    for label, weights_path in runs:
-        score_model(label, weights_path, coco_gt, val_names, block_of)
+    print(f"scoring on {len(names_list)} {arg.split} tiles")
+    coco_gt = build_coco_gt(names_list)
+    score_model(arg.run, arg.ckpt, coco_gt, names_list, block_of, arg.split)
 
 
 if __name__ == "__main__":
-    main()
+    p = argparse.ArgumentParser()
+    p.add_argument("--run", required=True)
+    p.add_argument("--ckpt", required=True)
+    p.add_argument("--split", default="val", choices=["val", "test"])
+
+    main(p.parse_args())

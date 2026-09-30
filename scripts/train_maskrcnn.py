@@ -2,6 +2,8 @@ import json
 import os
 import time
 
+import argparse
+import csv
 import numpy as np
 import rasterio
 import torch
@@ -29,9 +31,9 @@ LR = 0.02 * BATCH_SIZE / 16
 MOMENTUM = 0.9
 WEIGHT_DECAY = 1e-4
 LR_DECAY_EPOCHS = [int(EPOCHS * 0.75), int(EPOCHS * 0.9)]  # 10x drop at each, as in the paper
-TRAINABLE_BACKBONE_LAYERS = 0  # 0 = freeze whole ResNet; torchvision default is 3 (only stem + layer1 frozen)
+# TRAINABLE_BACKBONE_LAYERS = 0  # 0 = freeze whole ResNet; torchvision default is 3 (only stem + layer1 frozen)
 SEED = 0
-CHECKPOINT = "checkpoints/maskrcnn_checkpoint.pt"  # {epoch, model, optimizer} - lets an interrupted run resume
+# CHECKPOINT = "checkpoints/maskrcnn_checkpoint.pt"  # {epoch, model, optimizer} - lets an interrupted run resume
 
 anchor_gen = AnchorGenerator(sizes=((16,), (32,), (64,), (128,), (256,)),
                              aspect_ratios=((0.5, 1.0, 2.0),) * 5)
@@ -43,9 +45,13 @@ class TileDataset(Dataset):
     ids from the source shapefile (see build_dataset.py), so instances don't need
     reconstructing from a merged blob — touching structures stay separate."""
 
-    def __init__(self, names_list, augment=False):
-        self.names_list = names_list
-        self.augment = augment
+    # def __init__(self, names_list, augment=False):
+    #     self.names_list = names_list
+    #     self.augment = augment
+
+    def __init__(self, names_list, augment=False, aug="flip", min_area=4):
+        self.names_list, self.augment, self.aug, self.min_area = names_list, augment, aug, min_area
+
 
     def __len__(self):
         return len(self.names_list)
@@ -53,9 +59,25 @@ class TileDataset(Dataset):
     def __getitem__(self, i):
         name = self.names_list[i]
         with rasterio.open(f"{DATA_DIR}/images/{name}") as s:
-            img_arr = s.read()  # (3, H, W) uint8
+            img_arr = s.read()
         with rasterio.open(f"{DATA_DIR}/masks/{name}") as s:
-            instance_arr = s.read(1)  # (H, W) uint16, 0 = background, 1..N = instance id
+            instance_arr = s.read(1)
+        image = torch.from_numpy(img_arr).float() / 255.0
+
+        if self.augment:
+            if np.random.random() < 0.5:
+                image = image.flip(-1); instance_arr = instance_arr[:, ::-1]
+            if np.random.random() < 0.5:
+                image = image.flip(-2); instance_arr = instance_arr[::-1, :]
+            if self.aug == "full":
+                k = np.random.randint(4)
+                image = torch.rot90(image, k, dims=(-2, -1))
+                instance_arr = np.rot90(instance_arr, k)
+                c = np.random.uniform(0.85, 1.15)   # contrast
+                b = np.random.uniform(-0.08, 0.08)  # brightness, same shift on all bands
+                m = image.mean()
+                image = ((image - m) * c + m + b).clamp(0, 1)
+            instance_arr = np.ascontiguousarray(instance_arr)
 
         boxes, masks = [], []
         for instance_id in np.unique(instance_arr):
@@ -63,39 +85,30 @@ class TileDataset(Dataset):
                 continue
             mask_k = instance_arr == instance_id
             ys, xs = np.where(mask_k)
-            if len(xs) < 4:  # drop specks too small to be a real structure
+            if len(xs) < self.min_area:
                 continue
             boxes.append([xs.min(), ys.min(), xs.max() + 1, ys.max() + 1])
             masks.append(mask_k)
 
-        image = torch.from_numpy(img_arr).float() / 255.0
         masks_arr = np.stack(masks) if masks else np.zeros((0, *instance_arr.shape), dtype=bool)
         boxes_arr = np.array(boxes, dtype=np.float32).reshape(-1, 4)
-
-        if self.augment:
-            # overhead imagery has no canonical orientation, so flips are safe augmentation
-            h, w = instance_arr.shape
-            if np.random.random() < 0.5:  # horizontal flip
-                image = image.flip(-1)
-                masks_arr = masks_arr[:, :, ::-1]
-                boxes_arr[:, [0, 2]] = w - boxes_arr[:, [2, 0]]
-            if np.random.random() < 0.5:  # vertical flip
-                image = image.flip(-2)
-                masks_arr = masks_arr[:, ::-1, :]
-                boxes_arr[:, [1, 3]] = h - boxes_arr[:, [3, 1]]
-
         target = {
-            "boxes": torch.from_numpy(boxes_arr.copy()),
+            "boxes": torch.from_numpy(boxes_arr),
             "labels": torch.ones(len(boxes), dtype=torch.int64),
-            "masks": torch.from_numpy(masks_arr.copy().astype(np.uint8)),
+            "masks": torch.from_numpy(masks_arr.astype(np.uint8)),
             "image_id": torch.tensor([i]),
         }
         return image, target
 
 
-def main():
+def main(args):
 
     torch.manual_seed(SEED)
+    np.random.seed(SEED)
+
+    run = args.run
+    ckpt_path = f"checkpoints/{run}_checkpoint.pt"
+    os.makedirs("checkpoints", exist_ok=True); os.makedirs("logs", exist_ok=True)
 
     # 1. splits from the dataset index (plain json: geopandas isn't installed in this env)
     features_list = json.load(open(f"{DATA_DIR}/index.geojson"))["features"]
@@ -105,9 +118,9 @@ def main():
     print({k: len(v) for k, v in names_by_split.items()})
 
     collate_fn = lambda batch: tuple(zip(*batch))
-    train_loader = DataLoader(TileDataset(names_by_split["train"], augment=True), batch_size=BATCH_SIZE,
-                               shuffle=True, collate_fn=collate_fn)
-    val_loader = DataLoader(TileDataset(names_by_split["val"]), batch_size=BATCH_SIZE,
+    train_loader = DataLoader(TileDataset(names_by_split["train"], augment=True, aug=args.aug, min_area=args.min_area),
+                               batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
+    val_loader = DataLoader(TileDataset(names_by_split["val"], min_area=args.min_area), batch_size=BATCH_SIZE,
                              shuffle=False, collate_fn=collate_fn)
 
     # 2. Mask R-CNN, pretrained backbone, 2 classes: background + structure
@@ -115,7 +128,7 @@ def main():
     model = maskrcnn_resnet50_fpn_v2(weights=MaskRCNN_ResNet50_FPN_V2_Weights.DEFAULT, 
                                      min_size=TRAIN_SCALES, 
                                      max_size=TILE_PX, 
-                                     trainable_backbone_layers=TRAINABLE_BACKBONE_LAYERS, 
+                                     trainable_backbone_layers=args.backbone_layers, 
                                      box_detections_per_img=200)
     # the v2 builder hardcodes its own anchor generator, so it can't be passed as a kwarg
     model.rpn.anchor_generator = anchor_gen
@@ -131,14 +144,14 @@ def main():
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=LR_DECAY_EPOCHS, gamma=0.1)
     start_epoch = 0
     best_val = float("inf")
-    if os.path.exists(CHECKPOINT):
-        ckpt = torch.load(CHECKPOINT, map_location=DEVICE)
+    if os.path.exists(ckpt_path):
+        ckpt = torch.load(ckpt_path, map_location=DEVICE)
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         scheduler.load_state_dict(ckpt["scheduler"])
         start_epoch = ckpt["epoch"] + 1
         best_val = ckpt["best_val"]
-        print(f"resumed from {CHECKPOINT}: starting at epoch {start_epoch}", flush=True)
+        print(f"resumed from {ckpt_path}: starting at epoch {start_epoch}", flush=True)
 
     warmup = None
     # LinearLR scales the LR on construction, so it must be created once, not per epoch
@@ -186,13 +199,20 @@ def main():
               f"val loss {val_loss / len(val_loader):.3f} | lr {scheduler.get_last_lr()[0]:.2e} | {time.time() - t0:.0f}s", flush=True)
         if val_loss / len(val_loader) < best_val:
             best_val = val_loss / len(val_loader)
-            torch.save(model.state_dict(), "checkpoints/maskrcnn_best.pt")
-            print(f"  new best val loss -> saved maskrcnn_best.pt", flush=True)
-        torch.save({"epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
-                    "scheduler": scheduler.state_dict(), "best_val": best_val}, CHECKPOINT)
+            torch.save(model.state_dict(), f"checkpoints/{run}_bestloss.pt")
+            print(f"  new best val loss -> saved {run}_bestloss.pt", flush=True)
+        ckpt_state = {"epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                      "scheduler": scheduler.state_dict(), "best_val": best_val}
+        torch.save(ckpt_state, f"checkpoints/{run}_ep{epoch:02d}.pt")
+        torch.save(ckpt_state, ckpt_path)  # fixed name for resume, alongside the per-epoch history above
 
-    torch.save(model.state_dict(), "checkpoints/maskrcnn_structures.pt")
+    torch.save(model.state_dict(), f"checkpoints/{run}_final.pt")
 
 
 if __name__ == "__main__":
-    main()
+    p = argparse.ArgumentParser()
+    p.add_argument("--run", required=True)
+    p.add_argument("--backbone-layers", type=int, default=0)
+    p.add_argument("--aug", choices=["flip", "full"], default="flip")
+    p.add_argument("--min-area", type=int, default=4)
+    main(p.parse_args())
