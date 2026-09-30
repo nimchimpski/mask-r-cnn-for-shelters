@@ -13,12 +13,11 @@ from torchvision.models.detection import maskrcnn_resnet50_fpn_v2, MaskRCNN_ResN
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
 from torchvision.models.detection.anchor_utils import AnchorGenerator
-from scripts.geo_mod import TileDataset
+from scripts.geo_mod import TileDataset, DATA_DIR
 
 
 
-
-DATA_DIR = "dataset_camps"
+# DATA_DIR = "dataset_camps"
 # torch 2.7/torchvision 0.22 hung on MPS in Mask R-CNN's RoIAlign backward;
 # fixed in torch 2.14/torchvision 0.29 (env: camp_maskrcnn) - use that env, not floodai_train
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
@@ -209,8 +208,7 @@ def main(args):
             print(f"  new best val loss -> saved {run}_bestloss.pt", flush=True)
         ckpt_state = {"epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
                       "scheduler": scheduler.state_dict(), "best_val": best_val}
-        torch.save(ckpt_state, f"checkpoints/{run}_ep{epoch:02d}.pt")
-        torch.save(ckpt_state, ckpt_path)  # fixed name for resume, alongside the per-epoch history above
+        torch.save(ckpt_state, ckpt_path)  # for resuming interrupted training
 
     torch.save(model.state_dict(), f"checkpoints/{run}_final.pt")
 

@@ -5,8 +5,14 @@ Everything else is inlined in the scripts (see analyze_camp.py).
 
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import box
+import rasterio
+import torch
+import numpy as np  
 
+from shapely.geometry import box
+from torch.utils.data import Dataset
+
+DATA_DIR = "dataset_camps"
 
 def diagnose_geometries(gdf: gpd.GeoDataFrame) -> tuple[pd.Series, dict]:
     """
@@ -75,6 +81,7 @@ def generate_tile_grid(
     print(f"Generated {len(tile_gdf)} candidate tiles at {tile_size_m:.1f} m per side "
           f"({tile_size_px}px @ {resolution_m}m/px)")
     return tile_gdf
+
 
 class TileDataset(Dataset):
     """torch's training loop needs a Dataset subclass. Masks already carry per-structure

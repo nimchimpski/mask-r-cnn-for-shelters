@@ -71,7 +71,7 @@ def load_model(weights_path):
 
 
 def run_inference(model, names_list):
-    """Returns COCO-format detections (list of dicts) for all val tiles."""
+    """Returns COCO-format detections (list of dicts) for all input tiles."""
     dataset = TileDataset(names_list)
     detections = []
     with torch.no_grad():
