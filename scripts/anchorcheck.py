@@ -1,4 +1,10 @@
+"""Compare how well two anchor-size configs cover the dataset's structures.
 
+Builds the default (32-512) and custom (16-256) Mask R-CNN anchors for a 512 px tile, takes the
+instance bounding boxes (>= 25 px) from every 3rd mask in dataset_camps/masks, and prints each
+config's best-anchor IoU per box: median, share below 0.5, and the same for small boxes (< 32 px side).
+Run from the repo root.
+"""
 import json, glob, numpy as np, rasterio, torch
 from torchvision.models.detection.anchor_utils import AnchorGenerator
 from torchvision.models.detection.image_list import ImageList

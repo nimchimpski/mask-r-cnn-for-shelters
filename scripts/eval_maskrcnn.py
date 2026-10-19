@@ -209,12 +209,12 @@ def score_model(label, weights_path, coco_gt, names_list, block_of, split):
 
 
 def main(arg):
-    features_list = json.load(open(f"{DATA_DIR}/index.geojson"))["features"]
-    names_list = [f["properties"]["name"] for f in features_list if f["properties"]["split"] == arg.split]
-    block_of = {f["properties"]["name"]: f["properties"]["block"] for f in features_list}
-    print(f"scoring on {len(names_list)} {arg.split} tiles")
-    coco_gt = build_coco_gt(names_list)
-    score_model(arg.run, arg.ckpt, coco_gt, names_list, block_of, arg.split)
+    tiles_dict = json.load(open(f"{DATA_DIR}/index.geojson"))["features"]
+    tiles_list = [f["properties"]["name"] for f in tiles_dict if f["properties"]["split"] == arg.split]
+    block_of = {f["properties"]["name"]: f["properties"]["block"] for f in tiles_dict}
+    print(f"scoring on {len(tiles_list)} {arg.split} tiles")
+    coco_gt = build_coco_gt(tiles_list)
+    score_model(arg.run, arg.ckpt, coco_gt, tiles_list, block_of, arg.split)
 
 
 if __name__ == "__main__":

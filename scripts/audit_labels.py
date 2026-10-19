@@ -1,3 +1,10 @@
+"""Audit a label file against the drone images it should match.
+
+Prints label health (CRS, polygon count, invalid/empty/multipart, value counts per field), then for
+each camp tif: CRS, resolution, size, bands, nodata, date tags, number of intersecting polygons,
+their area and side-in-pixels percentiles, and how much of the image the label hull covers.
+Edit SHP and CAMPS below; run from the repo root.
+"""
 from pathlib import Path
 import geopandas as gpd, rasterio, numpy as np
 from shapely.geometry import box
