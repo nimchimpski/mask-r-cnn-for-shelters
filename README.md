@@ -88,7 +88,6 @@ logs/
 ```
 
 ## Current state
-- **Run 5b** (latest): val AP .50:.95 = 0.315, test AP = 0.311
 - Data: 721 tiles (482 train / 108 val / 131 test) from 3 camps, 0.1 m/px drone imagery
 - Labels: ~19,307 structures from UNOSAT/REACH Jan 2019 footprints (cleaned)
 
