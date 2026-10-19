@@ -108,7 +108,7 @@ logs/
 
 - Do **not** re-evaluate test split repeatedly; it should be checked once at the end to avoid
   turning it into a second validation set.
-- The gap between val and test metrics (AP 0.315 vs 0.311) is minimal; no sign of overfitting.
+- The gap between val and test metrics is minimal; no sign of overfitting.
 - Residual label noise (~5 months imagery/label drift) is acceptable for training; only clean
   val labels if model disagreements reveal genuine errors.
 
